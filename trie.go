@@ -34,19 +34,12 @@ func (t *CIDRTrie) Insert(cidr string, data any) error {
 }
 
 func (t *CIDRTrie) InsertIpNet(ipNet *net.IPNet, data any) error {
-	node := t.rootV4
-	if ipNet.IP.To4() == nil {
-		node = t.rootV6
+	ip, node := t.canonicalizeIPAndGetRoot(ipNet.IP)
+	if node == nil {
+		return nil // Invalid IP
 	}
 
 	prefix, _ := ipNet.Mask.Size()
-
-	ip := ipNet.IP
-	if ip.To4() != nil {
-		ip = ip.To4()
-	} else {
-		ip = ip.To16()
-	}
 
 	for i := 0; i < prefix; i++ {
 		byteIndex := i / 8
@@ -64,28 +57,19 @@ func (t *CIDRTrie) InsertIpNet(ipNet *net.IPNet, data any) error {
 }
 
 func (t *CIDRTrie) SearchBest(ip net.IP) (*net.IPNet, any) {
-	node := t.rootV4
-	if ip.To4() == nil {
-		node = t.rootV6
-		// Use 16-byte representation for IPv6
-		ip = ip.To16()
-	} else {
-		// Use 4-byte representation for IPv4
-		ip = ip.To4()
-	}
-
-	if ip == nil {
+	canonIP, node := t.canonicalizeIPAndGetRoot(ip)
+	if node == nil || canonIP == nil {
 		return nil, nil
 	}
 
 	var bestMatch *net.IPNet
 	var data any
 
-	maxBits := len(ip) * 8
+	maxBits := len(canonIP) * 8
 	for i := 0; i < maxBits && node != nil; i++ {
 		byteIndex := i / 8
 		bitIndex := 7 - (i % 8)
-		bit := int((ip[byteIndex] >> bitIndex) & 1)
+		bit := int((canonIP[byteIndex] >> bitIndex) & 1)
 
 		node = node.children[bit]
 		if node != nil && node.cidr != nil {
@@ -97,22 +81,16 @@ func (t *CIDRTrie) SearchBest(ip net.IP) (*net.IPNet, any) {
 }
 
 func (t *CIDRTrie) SearchFast(ip net.IP) (*net.IPNet, any) {
-	node := t.rootV4
-	if ip.To4() == nil {
-		node = t.rootV6
+	canonIP, node := t.canonicalizeIPAndGetRoot(ip)
+	if node == nil || canonIP == nil {
+		return nil, nil
 	}
 
-	if ip.To4() != nil {
-		ip = ip.To4()
-	} else {
-		ip = ip.To16()
-	}
-
-	maxBits := len(ip) * 8
+	maxBits := len(canonIP) * 8
 	for i := 0; i < maxBits; i++ {
 		byteIndex := i / 8
 		bitIndex := 7 - (i % 8)
-		bit := int((ip[byteIndex] >> bitIndex) & 1)
+		bit := int((canonIP[byteIndex] >> bitIndex) & 1)
 
 		node = node.children[bit]
 		if node == nil {
@@ -144,4 +122,14 @@ func (t *CIDRTrie) Contains(ip string) bool {
 func (t *CIDRTrie) ContainsIP(netip net.IP) bool {
 	n, _ := t.SearchFast(netip)
 	return n != nil
+}
+
+func (t *CIDRTrie) canonicalizeIPAndGetRoot(ip net.IP) (net.IP, *TrieNode) {
+	if v4 := ip.To4(); v4 != nil {
+		return v4, t.rootV4
+	}
+	if v6 := ip.To16(); v6 != nil {
+		return v6, t.rootV6
+	}
+	return nil, nil
 }
